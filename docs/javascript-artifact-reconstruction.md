@@ -221,3 +221,7 @@ paired, ambiguous, and unpaired IPC, validation candidates, utility processes,
 and native binding requests. These fixtures establish parser and artifact-reader
 claims; they do not replace the later operator-supplied real-application
 benchmark.
+
+Package `exports` fallback arrays are supported both at the top level and under
+the root `"."` entry. The resolver selects targets in declared order using the
+same conditional and invalid-entry handling as nested exports arrays.
