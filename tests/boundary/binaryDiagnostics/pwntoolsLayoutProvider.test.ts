@@ -20,6 +20,43 @@ const requestSchema = z.strictObject({
   reply_path: z.string(),
 });
 
+it.runIf(!unsupportedHost)(
+  "retains actual diagnostic truncation when output overflow and process cleanup both fail",
+  async () => {
+    const { path } = await fixture();
+    let ownedPath = "";
+    const provider = new PwntoolsLayoutProvider(
+      { REA_PWNTOOLS_PYTHON: process.execPath },
+      async (spawn) => {
+        ownedPath = spawn.cwd ?? "";
+        const launched = await spawnOwnedProviderProcess({
+          ...spawn,
+          command: process.execPath,
+          arguments: ["-e", 'process.stdout.write("x".repeat(1048577))'],
+        });
+        return {
+          ...launched,
+          cleanup: async () => {
+            await launched.cleanup?.();
+            throw new Error("injected post-cleanup reporting failure");
+          },
+        };
+      },
+    );
+    const result = await provider.inspect({ path });
+    if (result.ok) throw new Error("Expected compounded lifecycle failure");
+    expect(result.error).toMatchObject({
+      cleanupIncomplete: true,
+      diagnostics: {
+        reason: "injected post-cleanup reporting failure",
+        previous_error: { failure_kind: "output-limit" },
+        captured_output: { truncated: true, stderr: "" },
+      },
+    });
+    await expect(access(ownedPath)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
 it
   .runIf(!unsupportedHost)
   .each(["reserved-memory-status", "ordinary-exit", "signal"])(

@@ -44,6 +44,11 @@ export const pwntoolsLayoutFailure = (
         cause.resources,
         {
           reason: cause.cleanupFailure,
+          ...(cause.snapshot === null
+            ? {}
+            : {
+                captured_output: { ...capturedPwntoolsOutput(cause.snapshot) },
+              }),
           previous_error: {
             failure_kind: cause.reason,
             message: cause.message,
@@ -147,6 +152,13 @@ export const pwntoolsLayoutFailure = (
             signal: cause.snapshot?.signal ?? null,
             stdout: cause.snapshot?.stdout.text ?? null,
             stderr: cause.snapshot?.stderr.text ?? null,
+            ...(cause.snapshot === null
+              ? {}
+              : {
+                  captured_output: {
+                    ...capturedPwntoolsOutput(cause.snapshot),
+                  },
+                }),
           }
         : {}),
     },

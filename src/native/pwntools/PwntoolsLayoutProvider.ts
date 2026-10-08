@@ -232,6 +232,7 @@ export class PwntoolsLayoutProvider implements BinaryLayoutPort {
             reason: reply.message,
             stdout: execution.stdout.text,
             stderr: execution.stderr.text,
+            captured_output: { ...capturedOutput },
           },
         });
       }
