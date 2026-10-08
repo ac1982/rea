@@ -129,6 +129,10 @@ const binaryLayoutObjectSchema = z.strictObject({
       type: index,
       symbol_table_index: index,
       symbol_index: index,
+      symbol_reference_meaning: z.enum([
+        "zero-symbol-value",
+        "symbol-table-entry",
+      ]),
       addend: z
         .string()
         .regex(/^-?(?:0|[1-9][0-9]{0,18})$/)
@@ -282,6 +286,7 @@ export const binaryLayoutSchema = binaryLayoutObjectSchema.superRefine(
     }
     for (const [index, relocation] of value.relocations.entries())
       checkLocation(relocation.location, ["relocations", index, "location"]);
+    validateRelocationReferences(value, context);
     validatePackedRelativeTables(value, context, checkLocation);
     for (const facet of ["needed_libraries", "interpreters"] as const)
       for (const [index, reported] of value.linkage[facet].entries())
@@ -293,6 +298,64 @@ export type InspectBinaryLayoutInput = z.infer<
   typeof inspectBinaryLayoutInputSchema
 >;
 export type BinaryLayout = z.infer<typeof binaryLayoutSchema>;
+
+const validateRelocationReferences = (
+  value: z.output<typeof binaryLayoutObjectSchema>,
+  context: z.RefinementCtx,
+): void => {
+  const symbols = new Set(
+    value.symbols.map(
+      (symbol) => `${symbol.table_index}:${symbol.entry_index}`,
+    ),
+  );
+  for (const [index, relocation] of value.relocations.entries()) {
+    const owner = value.sections[relocation.section_index];
+    const target = relocation.target;
+    const targetMatches =
+      value.image_type === "ET_REL"
+        ? target.kind === "section-offset" &&
+          target.section_index === owner?.info &&
+          value.sections[target.section_index] !== undefined &&
+          target.offset === relocation.reported_offset
+        : target.kind === "linked-virtual-address" &&
+          target.address === relocation.reported_offset;
+    if (!targetMatches)
+      context.addIssue({
+        code: "custom",
+        path: ["relocations", index, "target"],
+        message:
+          "Relocation target must preserve the reported offset and image-relative meaning; relocatable targets must resolve the owner's section reference.",
+      });
+    const table = value.sections[relocation.symbol_table_index];
+    const tableExists =
+      relocation.symbol_table_index !== 0 &&
+      (table?.type === "SHT_SYMTAB" || table?.type === "SHT_DYNSYM");
+    const positiveReferenceExists =
+      tableExists &&
+      BigInt(table.entry_size) >= 24n &&
+      BigInt(relocation.symbol_index) <
+        BigInt(table.size) / BigInt(table.entry_size) &&
+      symbols.has(
+        `${relocation.symbol_table_index}:${relocation.symbol_index}`,
+      );
+    if (
+      (owner?.type !== "SHT_REL" && owner?.type !== "SHT_RELA") ||
+      owner.link !== relocation.symbol_table_index ||
+      (relocation.symbol_table_index !== 0 && !tableExists) ||
+      (relocation.symbol_index !== 0 && !positiveReferenceExists) ||
+      relocation.symbol_reference_meaning !==
+        (relocation.symbol_index === 0
+          ? "zero-symbol-value"
+          : "symbol-table-entry")
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["relocations", index],
+        message:
+          "Relocation must preserve its REL/RELA owner and resolve positive symbol indices through the linked symbol table; index zero uses a zero symbol value.",
+      });
+  }
+};
 
 const validatePackedRelativeTables = (
   value: z.output<typeof binaryLayoutObjectSchema>,

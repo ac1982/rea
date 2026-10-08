@@ -46,6 +46,10 @@ uses isolated mode and an owned cache. Exact upstream profiles are recorded in
   tables retain full original bytes and upstream-decoded offsets as derived
   evidence, with per-offset packed-word locations and implicit addends unknown.
   Overall relocation inventory completeness remains unknown.
+- REL/RELA symbol references retain their original table and entry indices.
+  Positive indices resolve through a validated symbol table; symbol index zero
+  means a zero symbol value without a table lookup, including when no table is
+  linked. Malformed references fail with the affected section and symbol index.
 - Name display strings may contain upstream replacement characters. Raw name
   bytes and string-table ranges retain observed identity where resolvable;
   ranges include the terminating NUL and base64 bytes exclude it.

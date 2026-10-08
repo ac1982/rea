@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { binaryLayoutSchema } from "./binaryLayout.js";
+import { binaryLayoutSchema, type BinaryLayout } from "./binaryLayout.js";
 
 const report = () => ({
   artifact: { path: "/fixture.elf", sha256: "a".repeat(64), bytes: 128 },
@@ -200,3 +200,116 @@ it.each([
     ).toBe(problem === "valid");
   },
 );
+
+it.each([
+  "valid",
+  "zero-symbol",
+  "zero-without-table",
+  "missing-table",
+  "wrong-table-kind",
+  "missing-symbol",
+  "symbol-outside-table",
+  "positive-without-table",
+  "owner-link-mismatch",
+  "wrong-meaning",
+  "valid-section-target",
+  "missing-target",
+  "wrong-target-owner",
+  "wrong-target-offset",
+])("validates relocation symbol reference semantics: %s", (problem) => {
+  const value = binaryLayoutSchema.parse(report());
+  value.artifact.bytes = 512;
+  const base = value.sections[0];
+  if (base === undefined) throw new Error("section missing");
+  value.sections.push(
+    {
+      ...base,
+      index: 1,
+      type: "SHT_SYMTAB",
+      header_location: { offset: "0x40", bytes: "0x40" },
+      offset: "0x100",
+      size: "0x30",
+      entry_size: "0x18",
+      file_backing: "file",
+    },
+    {
+      ...base,
+      index: 2,
+      type: "SHT_RELA",
+      header_location: { offset: "0x80", bytes: "0x40" },
+      offset: "0x130",
+      size: "0x18",
+      entry_size: "0x18",
+      link: 1,
+      file_backing: "file",
+    },
+  );
+  value.symbols.push({
+    table_index: 1,
+    entry_index: 1,
+    name: base.name,
+    name_offset: "0x0",
+    location: { offset: "0x118", bytes: "0x18" },
+    value: "0x0",
+    value_meaning: "undefined",
+    size: "0x0",
+    binding: "STB_GLOBAL",
+    type: "STT_NOTYPE",
+    visibility: "STV_DEFAULT",
+    section_index: "SHN_UNDEF",
+  });
+  const relocation: BinaryLayout["relocations"][number] = {
+    section_index: 2,
+    entry_index: 0,
+    reported_offset: "0x0",
+    target: { kind: "linked-virtual-address", address: "0x0" },
+    location: { offset: "0x130", bytes: "0x18" },
+    type: 1,
+    symbol_table_index: 1,
+    symbol_index: 1,
+    symbol_reference_meaning: "symbol-table-entry",
+    addend: "0",
+  };
+  const table = value.sections[1];
+  const owner = value.sections[2];
+  if (table === undefined || owner === undefined)
+    throw new Error("table or relocation owner missing");
+  if (problem.startsWith("zero")) {
+    relocation.symbol_index = 0;
+    relocation.symbol_reference_meaning = "zero-symbol-value";
+  }
+  if (problem === "zero-without-table" || problem === "positive-without-table")
+    owner.link = relocation.symbol_table_index = 0;
+  if (problem === "missing-table")
+    owner.link = relocation.symbol_table_index = 99;
+  if (problem === "wrong-table-kind") table.type = "SHT_PROGBITS";
+  if (problem === "missing-symbol") value.symbols = [];
+  if (problem === "symbol-outside-table") table.size = "0x18";
+  if (problem === "owner-link-mismatch") owner.link = 0;
+  if (problem === "wrong-meaning")
+    relocation.symbol_reference_meaning = "zero-symbol-value";
+  if (problem.includes("target")) {
+    value.image_type = "ET_REL";
+    value.entry_point.meaning = "not-applicable";
+    relocation.target = {
+      kind: "section-offset",
+      section_index:
+        problem === "missing-target"
+          ? 99
+          : problem === "wrong-target-owner"
+            ? 1
+            : 0,
+      offset: problem === "wrong-target-offset" ? "0x1" : "0x0",
+    };
+    if (problem === "missing-target") owner.info = 99;
+  }
+  value.relocations.push(relocation);
+  expect(binaryLayoutSchema.safeParse(value).success).toBe(
+    [
+      "valid",
+      "zero-symbol",
+      "zero-without-table",
+      "valid-section-target",
+    ].includes(problem),
+  );
+});

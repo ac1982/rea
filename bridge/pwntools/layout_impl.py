@@ -164,13 +164,23 @@ def inspect_elf(path, cache):
                             "visibility": raw.st_other.visibility, "section_index": raw.st_shndx,
                         })
                 if h.sh_type in ("SHT_REL", "SHT_RELA"):
+                    if image.header.e_type == "ET_REL" and h.sh_info >= len(all_sections):
+                        raise LayoutFailure("format", f"ELF relocation section {index} references missing target section {h.sh_info}.")
+                    symbol_table = None
+                    if h.sh_link != 0:
+                        if h.sh_link >= len(all_sections) or all_sections[h.sh_link].header.sh_type not in ("SHT_SYMTAB", "SHT_DYNSYM"):
+                            raise LayoutFailure("format", f"ELF relocation section {index} links to invalid symbol table {h.sh_link}.")
+                        symbol_table = all_sections[h.sh_link]
                     for entry, relocation in enumerate(section.iter_relocations()):
                         raw = relocation.entry
+                        if raw.r_info_sym != 0 and (symbol_table is None or raw.r_info_sym >= symbol_table.num_symbols()):
+                            raise LayoutFailure("format", f"ELF relocation section {index} entry {entry} references missing symbol {raw.r_info_sym} in table {h.sh_link}.")
                         relocations.append({
                             "section_index": index, "entry_index": entry, "reported_offset": address(raw.r_offset),
                             "target": {"kind": "section-offset", "section_index": h.sh_info, "offset": address(raw.r_offset)} if image.header.e_type == "ET_REL" else {"kind": "linked-virtual-address", "address": address(raw.r_offset)},
                             "location": location(h.sh_offset + entry * h.sh_entsize, h.sh_entsize, length),
                             "type": raw.r_info_type, "symbol_table_index": h.sh_link, "symbol_index": raw.r_info_sym,
+                            "symbol_reference_meaning": "zero-symbol-value" if raw.r_info_sym == 0 else "symbol-table-entry",
                             "addend": None if "r_addend" not in raw else str(raw.r_addend),
                         })
                 if h.sh_type == "SHT_RELR":
@@ -225,6 +235,7 @@ def inspect_elf(path, cache):
                     "Reported values preserve linked addresses, section offsets, TLS offsets, alignment and absolute values separately. Runtime load base and library paths are unknown.",
                     "Names are display strings plus raw bytes and file ranges where resolvable; section/table/entry indices preserve identity and duplicates. Name ranges include their terminating NUL; raw name bytes exclude it.",
                     "Ordinary relocation rows cover REL/RELA. RELR tables retain complete encoded bytes and upstream-decoded offsets as derived evidence; per-offset packed-word locations and implicit addends remain unknown. Relocation inventory completeness is unknown, including other encodings and missing section tables.",
+                    "Relocation symbol index zero uses a zero symbol value without a table lookup. Positive indices reference validated original symbol-table entries; raw table and symbol indices remain reported.",
                     "GOT/PLT are derived upstream convenience maps; PLT inference can emulate selected instructions in Unicorn. They do not establish target runtime behavior; aliases may collapse and warnings may indicate incomplete coverage. Their completeness is unknown.",
                     "Mitigations are upstream static heuristics, not runtime protection. ET_DYN does not prove an executable; absent canary symbols do not prove every function unprotected.",
                     "This profile inspects ELF EXEC/DYN/REL layout only. It does not analyze recorded cores, resolve loaded libraries, launch the target as a host process or start a debugger.",

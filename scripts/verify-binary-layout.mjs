@@ -381,7 +381,56 @@ try {
     bytes.writeBigUInt64LE(8n, header + 56);
     return [`undersized-entry-${type}`, bytes, "invalid_input"];
   });
+  const invalidRelocationReferences = [
+    ["missing-symbol-table", relocatable.sections.length + 100],
+    ["wrong-symbol-table-kind", 1],
+    ["positive-symbol-without-table", 0],
+    ["missing-relocation-symbol", null],
+  ].map(([name, link]) => {
+    const bytes = Buffer.from(object);
+    const header = Number(BigInt(relocationSection.header_location.offset));
+    if (link === null) {
+      const offset = Number(BigInt(relocationSection.offset)) + 8;
+      const type = bytes.readBigUInt64LE(offset) & 0xffffffffn;
+      bytes.writeBigUInt64LE((0xffffffffn << 32n) | type, offset);
+    } else bytes.writeUInt32LE(link, header + 40);
+    return [name, bytes, "invalid_input"];
+  });
+  const relative = protectedReport.relocations.find(
+    (item) => item.type === 8 && item.symbol_index === 0,
+  );
+  assert.notEqual(relative, undefined, "Required relative relocation absent");
+  const relativeOwner = protectedReport.sections[relative.section_index];
+  const noSymbolTable = Buffer.from(sectionBearingBytes);
+  const relativeHeader = Number(BigInt(relativeOwner.header_location.offset));
+  noSymbolTable.writeBigUInt64LE(
+    BigInt(relative.location.offset),
+    relativeHeader + 24,
+  );
+  noSymbolTable.writeBigUInt64LE(
+    BigInt(relative.location.bytes),
+    relativeHeader + 32,
+  );
+  noSymbolTable.writeUInt32LE(0, relativeHeader + 40);
+  const zeroSymbolPath = join(root.path, "relative-without-symbol-table");
+  await writeFile(zeroSymbolPath, noSymbolTable);
+  for (const mode of ["cli", "mcp"]) {
+    const value = await inspect(mode, zeroSymbolPath);
+    const reported = value.relocations.find(
+      (item) => item.section_index === relative.section_index,
+    );
+    assert.equal(reported.symbol_table_index, 0);
+    assert.equal(reported.symbol_index, 0);
+    assert.equal(reported.symbol_reference_meaning, "zero-symbol-value");
+    assert.deepEqual(await readFile(zeroSymbolPath), noSymbolTable);
+    cases++;
+  }
   const undersizedProgramHeader = Buffer.from(sectionBearingBytes);
+  const missingTargetSection = Buffer.from(object);
+  missingTargetSection.writeUInt32LE(
+    relocatable.sections.length + 100,
+    Number(BigInt(relocationSection.header_location.offset)) + 44,
+  );
   undersizedProgramHeader.writeUInt16LE(8, 54);
   undersizedProgramHeader.writeUInt16LE(1, 56);
   const symbolTable = relocatable.sections.find(
@@ -571,6 +620,12 @@ try {
     ...zeroSymbolEntries,
     ...undersizedSymbolEntries,
     ...undersizedRelocationEntries,
+    ...invalidRelocationReferences,
+    [
+      "missing-relocation-target-section",
+      missingTargetSection,
+      "invalid_input",
+    ],
     ["undersized-program-header", undersizedProgramHeader, "invalid_input"],
     ["arm64", unsupported, "unsupported_provider"],
     ["core", core, "unsupported_provider"],
