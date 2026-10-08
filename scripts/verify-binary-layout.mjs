@@ -396,6 +396,66 @@ try {
     } else bytes.writeUInt32LE(link, header + 40);
     return [name, bytes, "invalid_input"];
   });
+  const inactiveTarget = relocatable.sections.find(
+    (section) => section.name.display === ".comment",
+  );
+  assert.notEqual(
+    inactiveTarget,
+    undefined,
+    "Required inactive-target fixture absent",
+  );
+  for (const [name, targetIndex, reason] of [
+    ["undefined-relocation-target", 0, "undefined-section-reference"],
+    [
+      "inactive-relocation-target",
+      inactiveTarget.index,
+      "inactive-section-header",
+    ],
+  ]) {
+    const bytes = Buffer.from(object);
+    bytes.writeUInt32LE(
+      targetIndex,
+      Number(BigInt(relocationSection.header_location.offset)) + 44,
+    );
+    if (targetIndex !== 0)
+      bytes.writeUInt32LE(
+        0,
+        Number(BigInt(inactiveTarget.header_location.offset)) + 4,
+      );
+    const inactiveSymbol = relocatable.symbols.find(
+      (symbol) => symbol.name.display === "read_values",
+    );
+    assert.notEqual(inactiveSymbol, undefined);
+    if (targetIndex !== 0)
+      bytes.writeUInt16LE(
+        targetIndex,
+        Number(BigInt(inactiveSymbol.location.offset)) + 6,
+      );
+    const path = join(root.path, name);
+    await writeFile(path, bytes);
+    for (const mode of ["cli", "mcp"]) {
+      const value = await inspect(mode, path);
+      const rows = value.relocations.filter(
+        (item) => item.section_index === relocationSection.index,
+      );
+      assert.ok(rows.length > 0);
+      for (const row of rows)
+        assert.deepEqual(row.target, {
+          kind: "unknown-section",
+          reported_section_index: targetIndex,
+          offset: row.reported_offset,
+          unknown_reason: reason,
+        });
+      if (targetIndex !== 0)
+        assert.equal(
+          value.symbols.find((symbol) => symbol.name.display === "read_values")
+            .value_meaning,
+          "unknown-section-index",
+        );
+      assert.deepEqual(await readFile(path), bytes);
+      cases++;
+    }
+  }
   const relative = protectedReport.relocations.find(
     (item) => item.type === 8 && item.symbol_index === 0,
   );

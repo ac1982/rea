@@ -46,6 +46,8 @@ uses isolated mode and an owned cache. Exact upstream profiles are recorded in
   tables retain full original bytes and upstream-decoded offsets as derived
   evidence, with per-offset packed-word locations and implicit addends unknown.
   Overall relocation inventory completeness remains unknown.
+  A relocatable SHN_UNDEF target or inactive SHT_NULL header remains an explicit
+  unknown with the original reported section index and offset.
 - REL/RELA symbol references retain their original table and entry indices.
   Positive indices resolve through a validated symbol table; symbol index zero
   means a zero symbol value without a table lookup, including when no table is

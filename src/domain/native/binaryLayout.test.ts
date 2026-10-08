@@ -216,6 +216,10 @@ it.each([
   "missing-target",
   "wrong-target-owner",
   "wrong-target-offset",
+  "undefined-target",
+  "inactive-target",
+  "false-resolved-zero-target",
+  "wrong-unknown-target",
 ])("validates relocation symbol reference semantics: %s", (problem) => {
   const value = binaryLayoutSchema.parse(report());
   value.artifact.bytes = 512;
@@ -291,17 +295,45 @@ it.each([
   if (problem.includes("target")) {
     value.image_type = "ET_REL";
     value.entry_point.meaning = "not-applicable";
+    owner.info = 1;
     relocation.target = {
       kind: "section-offset",
       section_index:
         problem === "missing-target"
           ? 99
           : problem === "wrong-target-owner"
-            ? 1
-            : 0,
+            ? 2
+            : 1,
       offset: problem === "wrong-target-offset" ? "0x1" : "0x0",
     };
     if (problem === "missing-target") owner.info = 99;
+    if (problem === "false-resolved-zero-target") {
+      owner.info = 0;
+      relocation.target.section_index = 0;
+    }
+    if (
+      ["undefined-target", "inactive-target", "wrong-unknown-target"].includes(
+        problem,
+      )
+    ) {
+      if (problem === "inactive-target")
+        value.sections.push({ ...base, index: 3, type: "SHT_NULL" });
+      owner.info =
+        problem === "undefined-target"
+          ? 0
+          : problem === "inactive-target"
+            ? 3
+            : 1;
+      relocation.target = {
+        kind: "unknown-section",
+        reported_section_index: owner.info,
+        offset: "0x0",
+        unknown_reason:
+          problem === "undefined-target"
+            ? "undefined-section-reference"
+            : "inactive-section-header",
+      };
+    }
   }
   value.relocations.push(relocation);
   expect(binaryLayoutSchema.safeParse(value).success).toBe(
@@ -310,6 +342,8 @@ it.each([
       "zero-symbol",
       "zero-without-table",
       "valid-section-target",
+      "undefined-target",
+      "inactive-target",
     ].includes(problem),
   );
 });

@@ -124,6 +124,15 @@ const binaryLayoutObjectSchema = z.strictObject({
           kind: z.literal("linked-virtual-address"),
           address: unsignedHex,
         }),
+        z.strictObject({
+          kind: z.literal("unknown-section"),
+          reported_section_index: index,
+          offset: unsignedHex,
+          unknown_reason: z.enum([
+            "undefined-section-reference",
+            "inactive-section-header",
+          ]),
+        }),
       ]),
       location: range,
       type: index,
@@ -313,10 +322,20 @@ const validateRelocationReferences = (
     const target = relocation.target;
     const targetMatches =
       value.image_type === "ET_REL"
-        ? target.kind === "section-offset" &&
-          target.section_index === owner?.info &&
-          value.sections[target.section_index] !== undefined &&
-          target.offset === relocation.reported_offset
+        ? target.kind === "section-offset"
+          ? target.section_index !== 0 &&
+            target.section_index === owner?.info &&
+            value.sections[target.section_index] !== undefined &&
+            value.sections[target.section_index]?.type !== "SHT_NULL" &&
+            target.offset === relocation.reported_offset
+          : target.kind === "unknown-section" &&
+            target.reported_section_index === owner?.info &&
+            target.offset === relocation.reported_offset &&
+            (target.reported_section_index === 0
+              ? target.unknown_reason === "undefined-section-reference"
+              : value.sections[target.reported_section_index]?.type ===
+                  "SHT_NULL" &&
+                target.unknown_reason === "inactive-section-header")
         : target.kind === "linked-virtual-address" &&
           target.address === relocation.reported_offset;
     if (!targetMatches)
@@ -324,7 +343,7 @@ const validateRelocationReferences = (
         code: "custom",
         path: ["relocations", index, "target"],
         message:
-          "Relocation target must preserve the reported offset and image-relative meaning; relocatable targets must resolve the owner's section reference.",
+          "Relocation target must preserve its reported offset and owner reference; SHN_UNDEF and inactive headers remain unknown rather than resolved sections.",
       });
     const table = value.sections[relocation.symbol_table_index];
     const tableExists =

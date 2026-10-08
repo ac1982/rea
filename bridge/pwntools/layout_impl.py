@@ -76,17 +76,28 @@ def dynamic_name_reference(display, string_table, tags, offset, image, content):
     return name_in_table(display, offsets.pop(), sizes[0], offset, content)
 
 
-def symbol_value_meaning(raw, image_type, section_count):
+def symbol_value_meaning(raw, image_type, sections):
     index = raw.st_shndx
     if raw.st_info.type == "STT_FILE": return "no-address"
     if index == "SHN_UNDEF": return "undefined"
     if index == "SHN_COMMON": return "alignment"
     if index == "SHN_ABS": return "absolute-value"
-    if not isinstance(index, int) or not 0 < index < section_count or index >= 0xff00:
+    if not isinstance(index, int) or not 0 < index < len(sections) or index >= 0xff00:
+        return "unknown-section-index"
+    if sections[index].header.sh_type == "SHT_NULL":
         return "unknown-section-index"
     if image_type == "ET_REL": return "section-offset"
     if raw.st_info.type == "STT_TLS": return "tls-offset"
     return "linked-virtual-address"
+
+
+def relocation_target(image_type, section_index, offset, sections):
+    if image_type != "ET_REL":
+        return {"kind": "linked-virtual-address", "address": address(offset)}
+    if section_index == 0 or sections[section_index].header.sh_type == "SHT_NULL":
+        return {"kind": "unknown-section", "reported_section_index": section_index,
+                "offset": address(offset), "unknown_reason": "undefined-section-reference" if section_index == 0 else "inactive-section-header"}
+    return {"kind": "section-offset", "section_index": section_index, "offset": address(offset)}
 
 
 def inspect_elf(path, cache):
@@ -159,7 +170,7 @@ def inspect_elf(path, cache):
                             "table_index": index, "entry_index": entry,
                             "name": name_reference(symbol.name, strings, raw.st_name, content), "name_offset": address(raw.st_name),
                             "location": location(h.sh_offset + entry * h.sh_entsize, h.sh_entsize, length),
-                            "value": address(raw.st_value), "value_meaning": symbol_value_meaning(raw, image.header.e_type, len(all_sections)),
+                            "value": address(raw.st_value), "value_meaning": symbol_value_meaning(raw, image.header.e_type, all_sections),
                             "size": address(raw.st_size), "binding": raw.st_info.bind, "type": raw.st_info.type,
                             "visibility": raw.st_other.visibility, "section_index": raw.st_shndx,
                         })
@@ -177,7 +188,7 @@ def inspect_elf(path, cache):
                             raise LayoutFailure("format", f"ELF relocation section {index} entry {entry} references missing symbol {raw.r_info_sym} in table {h.sh_link}.")
                         relocations.append({
                             "section_index": index, "entry_index": entry, "reported_offset": address(raw.r_offset),
-                            "target": {"kind": "section-offset", "section_index": h.sh_info, "offset": address(raw.r_offset)} if image.header.e_type == "ET_REL" else {"kind": "linked-virtual-address", "address": address(raw.r_offset)},
+                            "target": relocation_target(image.header.e_type, h.sh_info, raw.r_offset, all_sections),
                             "location": location(h.sh_offset + entry * h.sh_entsize, h.sh_entsize, length),
                             "type": raw.r_info_type, "symbol_table_index": h.sh_link, "symbol_index": raw.r_info_sym,
                             "symbol_reference_meaning": "zero-symbol-value" if raw.r_info_sym == 0 else "symbol-table-entry",
@@ -236,6 +247,7 @@ def inspect_elf(path, cache):
                     "Names are display strings plus raw bytes and file ranges where resolvable; section/table/entry indices preserve identity and duplicates. Name ranges include their terminating NUL; raw name bytes exclude it.",
                     "Ordinary relocation rows cover REL/RELA. RELR tables retain complete encoded bytes and upstream-decoded offsets as derived evidence; per-offset packed-word locations and implicit addends remain unknown. Relocation inventory completeness is unknown, including other encodings and missing section tables.",
                     "Relocation symbol index zero uses a zero symbol value without a table lookup. Positive indices reference validated original symbol-table entries; raw table and symbol indices remain reported.",
+                    "Relocatable relocation targets with SHN_UNDEF or inactive SHT_NULL headers retain their reported section index/offset as unknown; they do not establish an associated target section.",
                     "GOT/PLT are derived upstream convenience maps; PLT inference can emulate selected instructions in Unicorn. They do not establish target runtime behavior; aliases may collapse and warnings may indicate incomplete coverage. Their completeness is unknown.",
                     "Mitigations are upstream static heuristics, not runtime protection. ET_DYN does not prove an executable; absent canary symbols do not prove every function unprotected.",
                     "This profile inspects ELF EXEC/DYN/REL layout only. It does not analyze recorded cores, resolve loaded libraries, launch the target as a host process or start a debugger.",
